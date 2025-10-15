@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ping Pong – adjustable AI</title>
+<style>
+    body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        margin: 0;
+        background: #111;
+        color: #eee;
+        font-family: sans-serif;
+    }
+    canvas {
+        border: 2px solid #fff;
+        background: #000;
+    }
+    #ui {
+        position: absolute;
+        top: 20px;
+        left: 0;
+        width: 100%;
+        text-align: center;
+        user-select: none;
+    }
+    button {
+        margin: 0 4px;
+        font-size: 15px;
+        padding: 6px 12px;
+        background: #06f;
+        color: #fff;
+        border: none;
+        cursor: pointer;
+    }
+    button:hover {
+        background: #08f;
+    }
+    input[type=range] {
+        vertical-align: middle;
+        width: 140px;
+    }
+    label {
+        margin-left: 12px;
+    }
+</style>
+</head>
+<body>
+<div id="ui">
+    <button id="newBtn">New Game</button>
+    <button id="modeBtn">1 Player</button>
+    <label>AI difficulty
+        <input type="range" id="diffSlider" min="0" max="100" value="50">
+        <span id="diffLabel">50</span>
+    </label>
+</div>
+
+<canvas id="game" width="640" height="320"></canvas>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+const paddleWidth = 10, paddleHeight = 70, paddleSpeed = 5;
+let left = { y: H/2 - paddleHeight/2, points: 0 };
+let right = { y: H/2 - paddleHeight/2, points: 0 };
+
+let ball = { x: W/2, y: H/2, vx: 3, vy: 2, r: 6 };
+
+let gameOver = true, anim;
+let keys = {};
+let aiMode = true;
+
+document.addEventListener('keydown', e => keys[e.key] = true);
+document.addEventListener('keyup', e => keys[e.key] = false);
+
+/* ---------- difficulty knobs ---------- */
+function getDifficulty() {
+    // slider 0-100 → map to useful ranges
+    const v = parseInt(document.getElementById('diffSlider').value, 10); // 0..100
+    return {
+        delayPx: (100 - v) * 1.8,          // 0..180 px反应延迟
+        maxErrorPx: (100 - v) * 1.2,       // 0..120 px随机误差
+        deadBandPx: (100 - v) * 0.6,       // 0..60 px舒适区
+        predictionErrorPx: (100 - v) * 1.0,// 0..100 px预测误差
+        aiSpeed: 2 + v * 0.04              // 2..6 px/frame速度
+    };
+}
+
+function resetBall() {
+    ball.x = W/2; ball.y = H/2;
+    ball.vx = (Math.random() < 0.5 ? 1 : -1) * (3 + Math.random()*2);
+    ball.vy = (Math.random()*2 - 1) * (2 + Math.random()*1.5);
+}
+
+/* ---------- game loop ---------- */
+function update() {
+    if (gameOver) return;
+
+    // left paddle (always human)
+    if (keys['w'] || keys['W']) left.y = Math.max(left.y - paddleSpeed, 0);
+    if (keys['s'] || keys['S']) left.y = Math.min(left.y + paddleSpeed, H - paddleHeight);
+
+    // right paddle
+    if (aiMode) {
+        const d = getDifficulty();
+        // reaction delay
+        if (ball.x < W - d.delayPx) { /*wait*/ } else {
+            // predicted Y when ball reaches right plane
+            let t = (W - paddleWidth - ball.x) / Math.abs(ball.vx);
+            let predY = ball.y + ball.vy * t;
+            // wall bounces
+            const period = (H + 2*ball.r);
+            const bounces = Math.floor((predY + ball.r) / period);
+            predY = (predY + ball.r) % period - ball.r;
+            if (bounces % 2) predY = H - predY - 2*ball.r;
+            // add errors
+            predY += (Math.random()-0.5)*(d.maxErrorPx + d.predictionErrorPx);
+            const targetY = predY - paddleHeight/2;
+            // dead-band
+            if (Math.abs(right.y + paddleHeight/2 - predY) < d.deadBandPx) {/*idle*/}
+            else {
+                if (right.y + paddleHeight/2 < targetY) right.y = Math.min(right.y + d.aiSpeed, H - paddleHeight);
+                if (right.y + paddleHeight/2 > targetY) right.y = Math.max(right.y - d.aiSpeed, 0);
+            }
+        }
+    } else { // 2-player
+        if (keys['ArrowUp'])   right.y = Math.max(right.y - paddleSpeed, 0);
+        if (keys['ArrowDown']) right.y = Math.min(right.y + paddleSpeed, H - paddleHeight);
+    }
+
+    // ball physics
+    ball.x += ball.vx; ball.y += ball.vy;
+    if (ball.y - ball.r <= 0 || ball.y + ball.r >= H) ball.vy *= -1;
+
+    // paddle collisions
+    if (ball.x - ball.r <= paddleWidth &&
+        ball.y >= left.y && ball.y <= left.y + paddleHeight) ball.vx = Math.abs(ball.vx);
+    if (ball.x + ball.r >= W - paddleWidth &&
+        ball.y >= right.y && ball.y <= right.y + paddleHeight) ball.vx = -Math.abs(ball.vx);
+
+    // scoring
+    if (ball.x < -ball.r) { right.points++; resetBall(); checkWin(); }
+    if (ball.x > W + ball.r)  { left.points++; resetBall(); checkWin(); }
+}
+
+function checkWin() {
+    if (left.points === 5 || right.points === 5) {
+        gameOver = true;
+        document.getElementById('newBtn').textContent =
+          (left.points === 5 ? 'Left' : 'Right') + ' wins – New Game';
+        cancelAnimationFrame(anim);
+    }
+}
+
+function draw() {
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle = '#fff';
+    // paddles
+    ctx.fillRect(0, left.y, paddleWidth, paddleHeight);
+    ctx.fillRect(W - paddleWidth, right.y, paddleWidth, paddleHeight);
+    // ball
+    ctx.beginPath(); ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2); ctx.fill();
+    // centre dashed line
+    ctx.beginPath(); ctx.setLineDash([5,5]); ctx.moveTo(W/2,0); ctx.lineTo(W/2,H);
+    ctx.strokeStyle = '#fff'; ctx.stroke(); ctx.setLineDash([]);
+    // score
+    ctx.font = '32px sans-serif';
+    ctx.fillText(left.points,  W/2 - 28, 40);
+    ctx.fillText(right.points, W/2 + 10, 40);
+}
+
+function loop() {
+    update(); draw(); anim = requestAnimationFrame(loop);
+}
+
+/* ---------- UI handlers ---------- */
+document.getElementById('newBtn').addEventListener('click', () => {
+    left.points = 0; right.points = 0; gameOver = false;
+    resetBall(); document.getElementById('newBtn').textContent = 'New Game';
+    loop();
+});
+
+document.getElementById('modeBtn').addEventListener('click', () => {
+    aiMode = !aiMode;
+    document.getElementById('modeBtn').textContent = aiMode ? '1 Player' : '2 Player';
+});
+
+document.getElementById('diffSlider').addEventListener('input', e => {
+    document.getElementById('diffLabel').textContent = e.target.value;
+});
+
+// initial static board
+draw();
+</script>
+</body>
+</html>
